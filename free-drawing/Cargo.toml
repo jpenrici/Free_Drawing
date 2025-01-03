@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+cairo = "0.0.4"
+gdk = { version = "0.9.5", package = "gdk4" }
 gtk = { version = "0.9.5", package = "gtk4" }
