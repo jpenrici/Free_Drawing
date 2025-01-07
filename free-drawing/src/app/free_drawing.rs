@@ -1,60 +1,55 @@
-use gtk::{prelude::*, EventControllerMotion};
+use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow};
-use gtk::{DrawingArea, Button, Label, Box, Orientation};
-use gtk::GestureClick;
+use gtk::{DrawingArea, Button, Label, Box, Orientation, ColorChooserDialog};
+use gtk::{GestureClick, EventControllerMotion};
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[derive(Default)]
+struct Pen {
+    positions: Vec<(f64, f64)>,
+    colors: Vec<(f32, f32, f32)>, // RGB values (0.0 - 1.0)
+    current_color: (f32, f32, f32),
+    drawing: bool,
+}
+
 pub fn start() {
     let app = Application::builder()
-    .application_id("app.example.free_drawing.com")
-    .build();
+        .application_id("app.example.free_drawing.com")
+        .build();
 
     app.connect_activate(build_ui);
     app.run();
 }
 
 fn build_ui(app: &Application) {
+    let width = 600;
+    let height = 400;
 
-    let width = 300;
-    let height = 300;
-
-    let vbox =  Box::new(Orientation::Vertical, 5);
-
+    let vbox = Box::new(Orientation::Vertical, 5);
     let button_box = Box::new(Orientation::Horizontal, 5);
     let drawing_box = Box::new(Orientation::Vertical, 5);
     let status_box = Box::new(Orientation::Vertical, 5);
 
-    let button = [
-        Button::with_label("Btn 1"),
-        Button::with_label("Btn 2"),
-        Button::with_label("Btn 3"),
-    ];
+    let button_color = Button::with_label("Color");
+    let button_clear = Button::with_label("Clear");
 
     let drawing_area = DrawingArea::builder()
-    .content_width(width - 5)
-    .content_height(height - 5)
-    .build();
+        .content_width(width - 5)
+        .content_height(height - 5)
+        .build();
 
-    let label = Label::builder()
-    .label("Status")
-    .build();
-
+    let label = Label::builder().label("Status").build();
     let label_rc = Rc::new(label);
 
-    let label_clone = label_rc.clone();
-    button[0].connect_clicked(move |_| on_clicked(&label_clone, 1));
+    let state = Rc::new(RefCell::new(Pen::default()));
+    
+    setup_color_button(&button_color, state.clone());
+    setup_clear_button(&button_clear, &drawing_area, state.clone());
 
-    let label_clone = label_rc.clone();
-    button[1].connect_clicked(move |_| on_clicked(&label_clone, 2));
-
-    let label_clone = label_rc.clone();
-    button[2].connect_clicked(move |_| on_clicked(&label_clone, 3));  
-
-    button_box.append(&button[0]);
-    button_box.append(&button[1]);
-    button_box.append(&button[2]);
+    button_box.append(&button_color);
+    button_box.append(&button_clear);
     drawing_box.append(&drawing_area);
     status_box.append(&*label_rc);
 
@@ -63,81 +58,118 @@ fn build_ui(app: &Application) {
     vbox.append(&status_box);
 
     let window = ApplicationWindow::builder()
-    .title("Free Drawing")
-    .default_width(width)
-    .default_height(height)
-    .application(app)
-    .child(&vbox)
-    .build();
+        .title("Free Drawing")
+        .default_width(width)
+        .default_height(height)
+        .application(app)
+        .child(&vbox)
+        .build();
 
-    setup_drawing(&drawing_area);
-
+    setup_drawing(&drawing_area, &label_rc, state);
     window.present();
 }
 
-#[derive(Default)]
-struct Pen {
-    positions: Vec<(f64, f64)>,
-    drawing: bool,
+fn setup_drawing(drawing_area: &DrawingArea, label: &Rc<Label>, state: Rc<RefCell<Pen>>) {
+    setup_mouse_click(drawing_area, state.clone());
+    setup_mouse_motion(drawing_area, label, state.clone());
+    setup_draw_function(drawing_area, state);
 }
 
-fn setup_drawing(drawing_area: &gtk::DrawingArea) {
-    let state = Rc::new(RefCell::new(Pen::default()));
-
+fn setup_mouse_click(drawing_area: &DrawingArea, state: Rc<RefCell<Pen>>) {
     let mouse_click = GestureClick::new();
-    mouse_click.set_button(1);  // Left Mouse Button
+    mouse_click.set_button(1);
 
-    let state_clone = state.clone();
+    let state_pressed = state.clone();
     mouse_click.connect_pressed(move |_, _, x, y| {
-        let mut state = state_clone.borrow_mut();
-        state.drawing = true;
+        let mut state = state_pressed.borrow_mut();
+        let current_color_temp = state.current_color;  // Ensure memory security.
         state.positions.push((x, y));
+        state.colors.push(current_color_temp);
+        state.drawing = true;
     });
- 
-    let state_clone = state.clone();
-    mouse_click.connect_released(move |_, _, _, _|{
-        let mut state = state_clone.borrow_mut();
+
+    let state_released = state;
+    mouse_click.connect_released(move |_, _, _, _| {
+        let mut state = state_released.borrow_mut();
         state.drawing = false;
     });
 
     drawing_area.add_controller(mouse_click);
+}
 
-    let mouse_position = EventControllerMotion::new();
-    let state_clone = state.clone();
+fn setup_mouse_motion(drawing_area: &DrawingArea, label: &Rc<Label>, state: Rc<RefCell<Pen>>) {
+    let motion = EventControllerMotion::new();
+    
+    let state_clone = state;
     let drawing_area_clone = drawing_area.clone();
+    let label_clone = label.clone();
 
-    mouse_position.connect_motion(move |_, x, y|{
+    motion.connect_motion(move |_, x, y| {
         let mut state = state_clone.borrow_mut();
+        let current_color_temp = state.current_color;
         if state.drawing {
             state.positions.push((x, y));
+            state.colors.push(current_color_temp);
             drawing_area_clone.queue_draw();
         }
+        label_clone.set_label(&format!("Mouse: ({:.2}, {:.2})", x, y));
     });
 
-    drawing_area.add_controller(mouse_position);
+    drawing_area.add_controller(motion);
+}
 
-    let state_clone = state.clone();
+fn setup_draw_function(drawing_area: &DrawingArea, state: Rc<RefCell<Pen>>) {
     drawing_area.set_draw_func(move |_area, cr, _width, _height| {
+        // Desenhar fundo branco
         cr.set_source_rgb(1.0, 1.0, 1.0);
         cr.paint().unwrap();
 
-        cr.set_source_rgb(0.0, 0.0, 0.0);
+        let state = state.borrow();
+        if state.positions.is_empty() {
+            return;
+        }
+
         cr.set_line_width(2.0);
 
-        let state = state_clone.borrow();
-        if let Some((first_x, first_y)) = state.positions.first() {
-            cr.move_to(*first_x, *first_y);
+        // Desenhar cada segmento com sua cor específica
+        for i in 1..state.positions.len() {
+            let (x1, y1) = state.positions[i-1];
+            let (x2, y2) = state.positions[i];
+            let (r, g, b) = state.colors[i];
             
-            for &(x, y) in state.positions.iter().skip(1) {
-                cr.line_to(x, y);
-            }
-            
+            cr.set_source_rgb(r as f64, g as f64, b as f64);
+            cr.move_to(x1, y1);
+            cr.line_to(x2, y2);
             cr.stroke().unwrap();
         }
     });
 }
 
-fn on_clicked(label: &Label, value: u32) {
-    println!("Btn {}", value);
-    label.set_label(&format!("Btn {}", value));
+fn setup_color_button(button: &Button, state: Rc<RefCell<Pen>>) {
+    button.connect_clicked(move |btn| {
+        let window = btn.root().and_downcast::<gtk::Window>().unwrap();
+        let dialog = ColorChooserDialog::new(Some("Choose Pen Color"), Some(&window));
+        
+        let state = state.clone();
+        dialog.connect_response(move |dialog, response| {
+            if response == gtk::ResponseType::Ok {
+                let rgba = dialog.rgba();
+                let mut state = state.borrow_mut();
+                state.current_color = (rgba.red(), rgba.green(), rgba.blue());
+            }
+            dialog.close();
+        });
+
+        dialog.show();
+    });
+}
+
+fn setup_clear_button(button: &Button, drawing_area: &DrawingArea, state: Rc<RefCell<Pen>>) {
+    let drawing_area = drawing_area.clone();
+    button.connect_clicked(move |_| {
+        let mut state = state.borrow_mut();
+        state.positions.clear();
+        state.colors.clear();
+        drawing_area.queue_draw();
+    });
 }
